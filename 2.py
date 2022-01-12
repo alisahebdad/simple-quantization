@@ -5,7 +5,7 @@ from quant import *
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import time
-
+import math
 
 def accuracy(output,target):
     print ('accuracy')
@@ -18,25 +18,42 @@ def accuracy(output,target):
 
 
 def unifrom_quantizer(x,bit=8,):
-    pass
-
-def uniform_quantizer_conv2d(layer):
-    weight = layer.weight.data
-    print (weight.shape)
+    #print (x.shape)
+    #print (x)
+    min_v = torch.min(x).item()
+    max_v = torch.max(x).item()
+    bound = max(abs(min_v),abs(max_v))
+    #print (bound)
+    #print (min_v,max_v)
+    levels = 2 ** (bit-1)
+    scale = bound/levels
+    #x = torch.clamp(x,min=-bound,max=bound)
+    x_int = torch.round(x/scale)*scale
+    #print (x_int)
+    #print (x)
     
+    return x_int
 
 
+def uniform_quantizer_conv2d(layer,bit=8):
+    weight = layer.weight.data
+    #print (weight.shape)
+    for c in range(weight.shape[0]):
+        #print (weight[c])
+        weight[c] = unifrom_quantizer(weight[c],bit=bit)
+        #print (weight[c])
+        #exit(0)
 
-def quntize(model,kind='uniform'):
+
+def quntize(model,kind='uniform',bit=8):
     for layer in model.modules():
         #print (type (layer))
         if isinstance(layer,nn.Conv2d):
             print ('Quantize conv2d',type(layer))
-            uniform_quantizer_conv2d(layer)
+            uniform_quantizer_conv2d(layer,bit=bit)
 
 
 
-    pass
 
 
 
@@ -55,18 +72,18 @@ def validate(model,val_loader,criterion):
             output = model(images)
             #print ('image',images.shape)
             #print ('output',output.shape)
-            #print ('target',target.shape)
             #print (target,output)
+            #print ('target',target.shape)
             loss = criterion(output,target)
             #print ('[remove] :',loss)            
             correct_item += accuracy(output,target)
             all_item += images.shape[0]
             print (correct_item,all_item,(correct_item/all_item)*100)
-            if all_item>100:
+            if all_item>10000:
                 break
 
 model_arch = 'vgg11_bn'
-batch_size = 16
+batch_size = 8
 shuffle_option = False
 
 
@@ -100,10 +117,16 @@ def main():
         pin_memory=True)
 
 
-    
-    quntize(model)
-
+    #print (model)
+    #quntize(model,bit=6)
+    print (model)
+    model = simple_quant_mode_acts(model,8)
+#    model = simple_quant_mode_acts(model,8)
+    #print (simple_quant_mode_acts(model,8))
+    print ('-'*100)
+    print (model)
     validate(model,val_loader,criterion=criterion)
+    #print (model)
     return model
 
 

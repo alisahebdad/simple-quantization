@@ -1,5 +1,6 @@
 
 import copy
+from typing import Sequence
 import torch
 import torch.nn as nn
 
@@ -82,3 +83,53 @@ def quant_model_acts(model, act_bits, get_stats, cali_batch_size=4):
                 setattr(quantized_model, attribute, 
                     quant_model_acts(module, act_bits, get_stats, cali_batch_size=cali_batch_size))
         return quantized_model
+
+
+def simple_quant_mode_acts(model,bit=8,name=''):
+
+    if type(model) in [nn.Conv2d]:
+        return nn.Sequential(SimpleQunAct(name=name),model)
+    if type(model) == nn.Sequential:
+        output = []
+        num = 0
+        for name_,modules in model.named_children():
+            output.append(simple_quant_mode_acts(modules,name=(name+str(num)) ))
+            num+=1
+        return nn.Sequential(*output)
+    
+
+    quantized_model = copy.deepcopy(model)
+    for attribute in dir(model):
+        module = getattr(model, attribute)
+        if isinstance(module, nn.Module):
+            setattr(quantized_model, attribute,simple_quant_mode_acts(module,name=name))
+    return quantized_model
+
+
+
+
+
+class SimpleQunAct(nn.Module):
+    allLayer = []
+    def __init__(self,bit=8,mode='forward',function='None',name='') -> None:
+        super(SimpleQunAct, self).__init__()
+        self.bit = bit
+        self.mode = mode
+        self.func = function
+        self.name = name
+        SimpleQunAct.allLayer.append(self)
+
+    def __repr__(self):
+        return super().__repr__()[:-1]+self.name+')'
+
+    def forward(self,x):
+        if self.mode == 'forward':
+            return x
+        if self.mode == 'monitor':
+            if self.func == 'Border':
+                pass
+                return x 
+        if self.mode == 'quan':
+
+
+            return x
