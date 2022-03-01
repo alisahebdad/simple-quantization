@@ -2,8 +2,9 @@
 import copy
 from typing import Sequence
 import torch
+from torch.functional import Tensor
 import torch.nn as nn
-
+import os 
 #from .pwlq import *
 from .uniform import *
 
@@ -88,7 +89,7 @@ def quant_model_acts(model, act_bits, get_stats, cali_batch_size=4):
 def simple_quant_mode_acts(model,bit=8,name=''):
 
     if type(model) in [nn.Conv2d]:
-        return nn.Sequential(SimpleQunAct(name=name),model)
+        return nn.Sequential(SimpleQunAct(name=name),model,SimpleLimit(name=name))
     if type(model) == nn.Sequential:
         output = []
         num = 0
@@ -102,7 +103,7 @@ def simple_quant_mode_acts(model,bit=8,name=''):
     for attribute in dir(model):
         module = getattr(model, attribute)
         if isinstance(module, nn.Module):
-            setattr(quantized_model, attribute,simple_quant_mode_acts(module,name=name))
+            setattr(quantized_model, attribute,simple_quant_mode_acts(module,name=(name+attribute)))
     return quantized_model
 
 
@@ -117,7 +118,60 @@ class SimpleQunAct(nn.Module):
         self.mode = mode
         self.func = function
         self.name = name
+        self.maxQ = None
+        self.minQ = None
         SimpleQunAct.allLayer.append(self)
+
+    def __repr__(self):
+        return super().__repr__()[:-1]+self.name+ '('+self.mode+'_'+self.func +'))'
+
+    def load_min_max(self,addr):
+        pass
+        self.maxQ = torch.load(os.path.join(addr,self.name+'_max.pt'))
+        self.minQ = torch.load(os.path.join(addr,self.name+'_min.pt'))
+
+
+
+    def forward(self,x):
+        if self.mode == 'forward':
+            #print ('-'*100)
+            #print (self.maxQ.shape)
+            #print (x.shape)
+            
+            
+            return x
+        if self.mode == 'monitor':
+            if self.func == 'Border':
+                if self.maxQ is not None:
+                    temp = torch.amax(x,dim=(0,2,3))
+                    self.maxQ = torch.max(temp,self.maxQ)
+                else:
+                    self.maxQ = torch.amax(x,dim=(0,2,3))
+
+                if self.minQ is not None:
+                    temp = torch.amin(x,dim=(0,2,3))
+                    self.minQ = torch.min(temp,self.minQ)
+                else:
+                    self.minQ = torch.amin(x,dim=(0,2,3))
+
+
+
+                return x 
+        if self.mode == 'quan':
+
+
+            return x
+
+
+class SimpleLimit(nn.Module):
+    allLayer = []
+    def __init__(self,mode='forward',name='') -> None:
+        super(SimpleLimit, self).__init__()
+        self.mode = mode
+        self.name = name
+        self.max_limit = None
+        self.min_limit = None
+
 
     def __repr__(self):
         return super().__repr__()[:-1]+self.name+')'
