@@ -14,13 +14,26 @@ import random
 import argparse
 import models as model_zoo
 import copy
-import Utility
+from Utility import *
+
+
+
 batch_size = 32
 shuffle_option = False
 save_max_min_act = False
 load_max_min_act = False
 
 save_max_min_act_addr = './stat'
+def temp():
+    return int(os.popen("nvidia-smi -q -d temperature | grep GPU | grep Cu | grep -Eo '[0-9]{1,4}'").read())
+
+
+def safe_temp():
+    if temp() > 79:
+        print ('stop for temp')
+        while temp() > 73:
+            time.sleep(1)
+        print ('start again')
 
 
 def accuracy(output,target):
@@ -74,8 +87,52 @@ def quntize(model,kind='uniform',bit=8):
 
 
 def tensor_fault(tensor,rate,bit):
+    #print (tensor.shape)
+    safe_temp()
+    q = list(tensor.shape)
+    q.insert(0,bit)
+     
+    u = torch.rand(q)
+    w = u<rate
+    #print (tensor)
+    #print ('-'*100)
+    #print (w.nonzero())
+
+    for i in w.nonzero():
+        #print ('-'*100)
+        #print (i[1:],i[0].item(),tensor[list(i[1:])])
+        org = int(tensor[list(i[1:])].item())
+        #print ('org:',org)
+        
+        if i[0] != (bit-1):
+
+            if org>=0:
+                if (org//(2**(i[0].item())))%2 == 1:
+                    org-= 2**i[0].item()
+                else:
+                    org+=2**i[0].item()
+            else:
+                if (org//(2**(i[0].item())))%2 == 1:
+                    org+= 2**i[0].item()
+                else:
+                    org-=2**i[0].item()
+
+        else:
+            org *= -1
+
+        tensor[list(i[1:])] = org
+        #print ('new data :',org)
+    #print (tensor)
+
+
+    #exit(0)
+    return
+
+
+
     if len(list(tensor.shape)) == 1:
         #print ('____________',tensor)
+        #exit(0)
         for i in range(len(tensor)):
             sign = -1 if tensor[i]<0 else 1
             b_ = list(bin(int(abs(tensor[i].item())))[2:])
@@ -142,7 +199,7 @@ def fault(model,rate,bit=8):
             fault_conv2d(layer,bit,rate)
 
 
-def validate(model,val_loader,criterion):
+def validate(model,val_loader,criterion,datakeeper,args):
     pass
     
     model.eval()
@@ -164,12 +221,23 @@ def validate(model,val_loader,criterion):
             #print ('[remove] :',loss)            
             correct_item += accuracy(output,target)
             all_item += images.shape[0]
-            print (correct_item,all_item,all_item/len(val_loader),(correct_item/all_item)*100)
-            if wait_sleep%20 == 0:
-                time.sleep(6)
-            #if all_item>1000:
-            #    break
-            #exit(0)
+            #print (correct_item,all_item,all_item/len(val_loader),(correct_item/all_item)*100)
+            safe_temp()
+
+        datakeeper.addRow(row={
+            'accuracy':str((correct_item/all_item)*100),
+            'band':str(args.quantize_weight),
+            'dataset':args.dataset,
+            'method':'',
+            'fault':str(args.fault),
+            'arch':str(args.arch)
+        })
+    
+    
+    
+    
+
+
     if save_max_min_act:
         for i in model.modules():
             if type(i) in [SimpleQunAct]:
@@ -210,10 +278,16 @@ def main():
     parser.add_argument('--quantize-weight',default=0,help='Weight Quantization with bit width param',type=int)
     parser.add_argument('--fault',default=0,help='fault rate ')
     parser.add_argument('--repeat',default=1,help='if repeate != 0 faulting and validating repeat ',type=int)
+    parser.add_argument('--result',default='./result.csv',help='location of result find',type=str)
+
 
     args = parser.parse_args()
     print(str(args))
-    
+
+    myDatakeeper = DataKeeper(args.result,['accuracy','band','dataset','method','fault','arch'])
+
+
+
     model = None
     criterion = None
     
@@ -285,9 +359,9 @@ def main():
         pin_memory=True)
         testloader = val_loader
     
-    model.cpu()
+    model.cuda()
 
-    original_model = copy.deepcopy(model)
+    #original_model = copy.deepcopy(model)
  
     
     #model = simple_quant_mode_acts(model,8)
@@ -302,7 +376,7 @@ def main():
 
     for i in range(args.repeat):
         print('-'*100,i)
-        model = copy.deepcopy(original_model)
+        #model = copy.deepcopy(original_model)
         if args.quantize_weight != 0:
 
             quntize(model,bit=args.quantize_weight)
@@ -319,7 +393,7 @@ def main():
             criterion = criterion.cuda()
 
         
-        validate(model,testloader,criterion=criterion)
+        validate(model,testloader,criterion=criterion,datakeeper=myDatakeeper,args=args)
     #print (model)
     return model
 
