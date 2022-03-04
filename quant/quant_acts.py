@@ -4,7 +4,9 @@ from typing import Sequence
 import torch
 from torch.functional import Tensor
 import torch.nn as nn
-import os 
+import os
+
+from zmq import device 
 #from .pwlq import *
 from .uniform import *
 
@@ -86,10 +88,13 @@ def quant_model_acts(model, act_bits, get_stats, cali_batch_size=4):
         return quantized_model
 
 
-def simple_quant_mode_acts(model,bit=8,name=''):
+def simple_quant_mode_acts(model,bit=8,name='',mode='monitor'):
 
     if type(model) in [nn.Conv2d]:
-        return nn.Sequential(SimpleQunAct(name=name),model,SimpleLimit(name=name))
+        if mode == 'monitor':
+            return nn.Sequential(model,SimpleLimit(name=name,mode='monitor'))
+        if mode == 'qunatized_act':
+            return nn.Sequential(SimpleQunAct(name=name),model,SimpleLimit(name=name))
     if type(model) == nn.Sequential:
         output = []
         num = 0
@@ -169,21 +174,52 @@ class SimpleLimit(nn.Module):
         super(SimpleLimit, self).__init__()
         self.mode = mode
         self.name = name
-        self.max_limit = None
-        self.min_limit = None
+        self.maxQ = None
+        self.minQ = None
+        SimpleLimit.allLayer.append((name,self))
 
+
+    def save_min_max(self,path):
+        min_addr = os.path.join(path,self.name+'_min.pt')
+        max_addr = os.path.join(path,self.name+'_max.pt')
+        torch.save(self.minQ,min_addr)
+        torch.save(self.maxQ,max_addr)
+
+    def load_min_max(self,path):
+        min_addr = os.path.join(path,self.name+'_min.pt')
+        max_addr = os.path.join(path,self.name+'_max.pt')
+        self.minQ = torch.load(min_addr)
+        self.maxQ = torch.load(max_addr)
+
+
+    def setMode(self,newMode):
+        self.mode = newMode
 
     def __repr__(self):
-        return super().__repr__()[:-1]+self.name+')'
+        return super().__repr__()[:-1]+self.name+'('+self.mode+'))'
 
     def forward(self,x):
         if self.mode == 'forward':
             return x
         if self.mode == 'monitor':
-            if self.func == 'Border':
-                pass
-                return x 
+            if self.maxQ is not None:
+                temp = torch.amax(x,dim=(0,2,3))
+                self.maxQ = torch.max(temp,self.maxQ)
+            else:
+                self.maxQ = torch.amax(x,dim=(0,2,3))
+            
+            if self.minQ is not None:
+                temp = torch.amin(x,dim=(0,2,3))
+                self.minQ = torch.min(temp,self.minQ)
+            else:
+                self.minQ = torch.amin(x,dim=(0,2,3))
+            return x 
+        if self.mode == 'org_bound':
+            for i in range(x.shape[1]):
+                x[:,i,:,:] = torch.clamp(x[:,i,:,:],min=self.minQ[i],max=self.maxQ[i])
+
+            return x
+
+
         if self.mode == 'quan':
-
-
             return x

@@ -224,7 +224,7 @@ def fault_conv2d(layer,bit,rate):
     layer.weight.data = weight
 
 
-def fault(model,rate,bit=8):
+def fault(model,rate,bit=8,args=None):
     i = 0
     # for layer in model.modules():
     #     if isinstance(layer,nn.Conv2d):
@@ -234,13 +234,18 @@ def fault(model,rate,bit=8):
     for layer in model.modules():
         #print (type (layer),'fault injecting ')
         if isinstance(layer,nn.Conv2d):
-            safe_temp()
+            if args is not None :
+                if not args.colab:
+                    safe_temp()
+            else:
+                safe_temp()
+            
             print ('Quantize conv2d',type(layer),i)
             i+=1
             fault_conv2d(layer,bit,rate)
 
 
-def validate(model,val_loader,criterion,datakeeper,args):
+def validate(model,val_loader,criterion,args,datakeeper=None):
     pass
     
     model.eval()
@@ -263,16 +268,22 @@ def validate(model,val_loader,criterion,datakeeper,args):
             correct_item += accuracy(output,target)
             all_item += images.shape[0]
             #print (correct_item,all_item,all_item/len(val_loader),(correct_item/all_item)*100)
-            safe_temp()
+            if not args.colab:
+                safe_temp()
 
-        datakeeper.addRow(row={
-            'accuracy':str((correct_item/all_item)*100),
-            'band':str(args.quantize_weight),
-            'dataset':args.dataset,
-            'method':'',
-            'fault':str(args.fault),
-            'arch':str(args.arch)
-        })
+        result_ = {
+                'accuracy':str((correct_item/all_item)*100),
+                'band':str(args.quantize_weight),
+                'dataset':args.dataset,
+                'method':'',
+                'fault':str(args.fault),
+                'arch':str(args.arch)
+            }
+
+        if datakeeper is not None:
+            datakeeper.addRow(row=result_)
+        else:
+            print (result_)
     
     
     
@@ -286,6 +297,7 @@ def validate(model,val_loader,criterion,datakeeper,args):
                     torch.save(i.minQ,os.path.join(save_max_min_act_addr,i.name+'_min.pt'))
                 if i.maxQ is not None:
                     torch.save(i.maxQ,os.path.join(save_max_min_act_addr,i.name+'_max.pt'))
+        exit(0)
 
 def changeMode(model,new_mode,bit=8):
     if new_mode == 'Border':
@@ -321,8 +333,11 @@ def main():
     parser.add_argument('--repeat',default=1,help='if repeate != 0 faulting and validating repeat ',type=int)
     parser.add_argument('--result',default='./result.csv',help='location of result find',type=str)
     parser.add_argument('--batch-size',default=32,help='batch size for validation ',type=int)
+    parser.add_argument('--colab',action='store_true')
+    parser.add_argument('--save-bound',help='save max and min',action='store_true') 
+    parser.add_argument('--protector',help='protect against fault',choices=['org']) 
 
-    
+
 
     args = parser.parse_args()
     print(str(args))
@@ -337,7 +352,8 @@ def main():
     val_loader = None
     
     for i in range(args.repeat):
-        
+        print('-'*100,i)
+
         
         if args.dataset == 'cifar10':
             model_name = '{}_{}.pth'.format(args.arch,args.dataset)
@@ -372,12 +388,12 @@ def main():
             trainset = torchvision.datasets.CIFAR10(
                 root=args.data, train=True, download=True, transform=transform_train)
             val_loader = torch.utils.data.DataLoader(
-                trainset, batch_size=128, shuffle=True, num_workers=2)
+                trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
             testset = torchvision.datasets.CIFAR10(
                 root=args.data, train=False, download=True, transform=transform_test)
             testloader = torch.utils.data.DataLoader(
-                testset, batch_size=100, shuffle=False, num_workers=2)
+                testset, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
             classes = ('plane', 'car', 'bird', 'cat', 'deer',
                     'dog', 'frog', 'horse', 'ship', 'truck')
@@ -400,7 +416,7 @@ def main():
                 transforms.CenterCrop(crop_size),
                 transforms.ToTensor(),
             ])),
-            batch_size=batch_size,
+            batch_size=args.batch_size,
             shuffle=True,
             num_workers=8,
             pin_memory=True)
@@ -421,25 +437,43 @@ def main():
         #model_org = copy.deepcopy(model)
             
 
-        print('-'*100,i)
         #model = copy.deepcopy(original_model)
         if args.quantize_weight != 0:
 
             quntize(model,bit=args.quantize_weight)
             print ('Quantized')
-            
+        if args.save_bound:
+            pass
+            # add simpleQuanAct at the end of each conv2d
+            #print (model)
+            model = simple_quant_mode_acts(model,args.quantize_weight,mode='monitor')
+            #print (model)
+            #print (SimpleLimit.allLayer)
+            validate(model,testloader,criterion=criterion,args=args)
 
-        model_modify = copy.deepcopy(model)
-        # return model,model_modify
+            for i in SimpleLimit.allLayer:
+                print (i[0])
+                i[1].save_min_max('./stat')
+            exit(0)
+
+        if args.protector:
+            model = simple_quant_mode_acts(model,args.quantize_weight,mode='monitor')
+            for i in SimpleLimit.allLayer:
+                print (i[0])
+                i[1].load_min_max('./stat')
+                i[1].setMode('org_bound')
+
+
         if args.fault !=0:
-            fault(model,float(args.fault),args.quantize_weight)
+            fault(model,float(args.fault),args.quantize_weight,args=args)
 
         if torch.cuda.is_available():
             model = model.cuda()
             criterion = criterion.cuda()
-
-        
         validate(model,testloader,criterion=criterion,datakeeper=myDatakeeper,args=args)
+        
+    
+    
     #print (model)
     return model
 
