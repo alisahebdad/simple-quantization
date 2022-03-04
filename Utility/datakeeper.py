@@ -18,6 +18,8 @@ class DataKeeper(object):
         for i in self.__field:
             if i not in row:
                 return False
+        print (row)
         self.__writer.writerow(row)
-
+        self.__csvFile.flush()
+        
 

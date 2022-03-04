@@ -2,6 +2,7 @@ from pydoc import describe
 from statistics import mode
 import torchvision.models as models
 import torch
+from zmq import device
 from fold_batch_norm import *
 from quant import *
 import torchvision.transforms as transforms
@@ -78,10 +79,12 @@ def uniform_quantizer_conv2d(layer,bit=8):
 
 
 def quntize(model,kind='uniform',bit=8):
+    i = 1
     for layer in model.modules():
         #print (type (layer))
         if isinstance(layer,nn.Conv2d):
-            print ('Quantize conv2d',type(layer))
+            print ('Quantize conv2d',type(layer),i)
+            i+=1
             uniform_quantizer_conv2d(layer,bit=bit)
             #print (layer.weight.bound,'+++')
 
@@ -174,28 +177,66 @@ def fault_inject(weight,rate,bit,bound):
     x_fault = level*scale    
 
     return x_fault
+
+def fault_inject2(weight,rate,bit,bound):
+   
+    levels = torch.rand_like(weight,device=torch.device('cuda:0'))
+
+    for c in range(weight.shape[0]):
+        
+        
+        
+        min_v = bound[c][0]#torch.min(x).item()
+        max_v = bound[c][1]#torch.max(x).item()
+        bound_ = max(abs(min_v),abs(max_v))
+        #print (bound)
+        #print (min_v,max_v)
+        levels_ = 2 ** (bit-1)
+        scale = bound_/levels_
+        #x = torch.clamp(x,min=-bound,max=bound)
+        #x_int = torch.round(x/scale)*scale
+        levels[c] = torch.div(weight[c],scale)
+
+    tensor_fault(levels,rate,bit)
+
+    for c in range(weight.shape[0]):
+        min_v = bound[c][0]#torch.min(x).item()
+        max_v = bound[c][1]#torch.max(x).item()
+        bound_ = max(abs(min_v),abs(max_v))
+        #print (bound)
+        #print (min_v,max_v)
+        levels_ = 2 ** (bit-1)
+        scale = bound_/levels_
+        levels[c] = torch.mul(levels[c],scale)        
+
+    return levels
+
+
+
+
+
 def fault_conv2d(layer,bit,rate):
     weight = layer.weight.data
-    for c in range(weight.shape[0]):
-        weight[c] = fault_inject(weight[c],rate,bit,layer.weight.bound[c])
+    #print ('fault_conv2d',layer.weight.bound)
+    #for c in range(weight.shape[0]):
+    #    weight[c] = fault_inject(weight[c],rate,bit,layer.weight.bound[c])
+    weight = fault_inject2(weight,rate,bit,layer.weight.bound)
+    layer.weight.data = weight
 
 
-def full_copy(model):
-    cop = copy.deepcopy(model)
+def fault(model,rate,bit=8):
+    i = 0
+    # for layer in model.modules():
+    #     if isinstance(layer,nn.Conv2d):
+    #         print (layer.weight.shape)
+
+
     for layer in model.modules():
         #print (type (layer),'fault injecting ')
         if isinstance(layer,nn.Conv2d):
-            #print ('Quantize conv2d',type(layer))
-            #fault_conv2d(layer,bit,rate)
-            #cop
-            pass
-
-    
-def fault(model,rate,bit=8):
-    for layer in model.modules():
-        print (type (layer),'fault injecting ')
-        if isinstance(layer,nn.Conv2d):
-            print ('Quantize conv2d',type(layer))
+            safe_temp()
+            print ('Quantize conv2d',type(layer),i)
+            i+=1
             fault_conv2d(layer,bit,rate)
 
 
@@ -279,13 +320,15 @@ def main():
     parser.add_argument('--fault',default=0,help='fault rate ')
     parser.add_argument('--repeat',default=1,help='if repeate != 0 faulting and validating repeat ',type=int)
     parser.add_argument('--result',default='./result.csv',help='location of result find',type=str)
+    parser.add_argument('--batch-size',default=32,help='batch size for validation ',type=int)
 
+    
 
     args = parser.parse_args()
     print(str(args))
 
     myDatakeeper = DataKeeper(args.result,['accuracy','band','dataset','method','fault','arch'])
-
+    batch_size = args.batch_size
 
 
     model = None
@@ -358,8 +401,8 @@ def main():
         num_workers=8,
         pin_memory=True)
         testloader = val_loader
-    
-    model.cuda()
+    if torch.cuda.is_available():
+        model.cuda()
 
     #original_model = copy.deepcopy(model)
  
