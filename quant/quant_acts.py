@@ -220,6 +220,12 @@ class SimpleLimit(nn.Module):
 
             return x
 
+        if self.mode == 'limit_bound':
+            for i in range(x.shape[1]):
+                x[:,i,:,:] = torch.clamp(x[:,i,:,:],min=self.minQ[i]*self.limit,max=self.maxQ[i]*self.limit)
+
+            return x
+
 
         if self.mode == 'quan':
             return x

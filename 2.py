@@ -16,7 +16,7 @@ import argparse
 import models as model_zoo
 import copy
 from Utility import *
-
+from tqdm import tqdm
 
 
 batch_size = 32
@@ -100,8 +100,11 @@ def tensor_fault(tensor,rate,bit):
     #print (tensor)
     #print ('-'*100)
     #print (w.nonzero())
-
-    for i in w.nonzero():
+    zeross = w.nonzero()
+    l = (len(zeross)//100)+1
+    p_bar = tqdm(range(len(zeross)))
+    xx = 0
+    for i in zeross:
         #print ('-'*100)
         #print (i[1:],i[0].item(),tensor[list(i[1:])])
         org = int(tensor[list(i[1:])].item())
@@ -122,8 +125,12 @@ def tensor_fault(tensor,rate,bit):
 
         else:
             org *= -1
-
+        
+        if xx%l == 0:
+            p_bar.update(l)
+            p_bar.refresh()
         tensor[list(i[1:])] = org
+        xx+=1
         #print ('new data :',org)
     #print (tensor)
 
@@ -245,13 +252,14 @@ def fault(model,rate,bit=8,args=None):
             fault_conv2d(layer,bit,rate)
 
 
-def validate(model,val_loader,criterion,args,datakeeper=None):
+def validate(model,val_loader,criterion,args,datakeeper=None,method=''):
     pass
     
     model.eval()
     all_item = 0
     correct_item = 0
     wait_sleep = 0
+    p_bar = tqdm(range(len(val_loader)))
     with torch.no_grad():
         for i , (images,target) in enumerate(val_loader):
             wait_sleep += 1
@@ -270,15 +278,18 @@ def validate(model,val_loader,criterion,args,datakeeper=None):
             #print (correct_item,all_item,all_item/len(val_loader),(correct_item/all_item)*100)
             if not args.colab:
                 safe_temp()
+            p_bar.update(1)
+            p_bar.refresh()
 
         result_ = {
                 'accuracy':str((correct_item/all_item)*100),
                 'band':str(args.quantize_weight),
                 'dataset':args.dataset,
-                'method':'',
+                'method':method,
                 'fault':str(args.fault),
                 'arch':str(args.arch)
             }
+        del p_bar
 
         if datakeeper is not None:
             datakeeper.addRow(row=result_)
@@ -335,7 +346,8 @@ def main():
     parser.add_argument('--batch-size',default=32,help='batch size for validation ',type=int)
     parser.add_argument('--colab',action='store_true')
     parser.add_argument('--save-bound',help='save max and min',action='store_true') 
-    parser.add_argument('--protector',help='protect against fault',choices=['org']) 
+    parser.add_argument('--protector',help='protect against fault',choices=['org','limit']) 
+    parser.add_argument('--limit',help='protect against fault with tight the  activations ',type=float) 
 
 
 
@@ -353,7 +365,7 @@ def main():
     
     for i in range(args.repeat):
         print('-'*100,i)
-
+        method = ''
         
         if args.dataset == 'cifar10':
             model_name = '{}_{}.pth'.format(args.arch,args.dataset)
@@ -457,11 +469,24 @@ def main():
             exit(0)
 
         if args.protector:
-            model = simple_quant_mode_acts(model,args.quantize_weight,mode='monitor')
-            for i in SimpleLimit.allLayer:
-                print (i[0])
-                i[1].load_min_max('./stat')
-                i[1].setMode('org_bound')
+            if args.protector == 'org':
+                method += 'org'
+                model = simple_quant_mode_acts(model,args.quantize_weight,mode='monitor')
+                for i in SimpleLimit.allLayer:
+                    #print (i[0])
+                    i[1].load_min_max('./stat')
+                    i[1].setMode('org_bound')
+            if args.protector == 'limit':
+                model = simple_quant_mode_acts(model,args.quantize_weight,mode='monitor')
+                if not args.limit:
+                    raise Exception('limit bound without limit rate ')
+                method += 'limit' + str(args.limit)
+                
+                for i in SimpleLimit.allLayer:
+                    #print (i[0])
+                    setattr(i[1],'limit',args.limit)
+                    i[1].load_min_max('./stat')
+                    i[1].setMode('limit_bound')
 
 
         if args.fault !=0:
@@ -470,7 +495,7 @@ def main():
         if torch.cuda.is_available():
             model = model.cuda()
             criterion = criterion.cuda()
-        validate(model,testloader,criterion=criterion,datakeeper=myDatakeeper,args=args)
+        validate(model,testloader,criterion=criterion,datakeeper=myDatakeeper,args=args,method=method)
         
     
     
