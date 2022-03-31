@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import time 
 #resnet50
-
+# hello to git 
 
 
 def validate(val_loader, model, criterion):
